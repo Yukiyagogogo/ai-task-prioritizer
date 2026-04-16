@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,14 +84,19 @@ def health_check():
 
 
 @app.post("/api/tasks", response_model=Task)
-def create_task(task_input: TaskInput):
+def create_task(task_input: TaskInput, x_api_key: Optional[str] = Header(default=None)):
     task_id = str(uuid.uuid4())[:8]
+
+    api_key = x_api_key or os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="请提供 DeepSeek API Key")
 
     analysis = agent.analyze_task(
         title=task_input.title,
         description=task_input.description,
         deadline=task_input.deadline,
         stakeholders=task_input.stakeholders,
+        api_key=api_key,
     )
 
     task = Task(
@@ -131,11 +136,14 @@ def get_task(task_id: str):
 
 
 @app.post("/api/tasks/{task_id}/decompose")
-def decompose_task(task_id: str):
+def decompose_task(task_id: str, x_api_key: Optional[str] = Header(default=None)):
     if task_id not in tasks_db:
         raise HTTPException(status_code=404, detail="Task not found")
     task = tasks_db[task_id]
-    subtasks = agent.decompose_task(task["title"], task["description"])
+    api_key = x_api_key or os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="请提供 DeepSeek API Key")
+    subtasks = agent.decompose_task(task["title"], task["description"], api_key=api_key)
     tasks_db[task_id]["subtasks"] = subtasks
     return tasks_db[task_id]
 

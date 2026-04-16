@@ -499,6 +499,39 @@ input::placeholder, textarea::placeholder { color: var(--text-dim); }
 .overlay-text { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
 .overlay-sub { font-size: 12px; color: var(--text-muted); }
 
+/* ── API Key UI ──────────────────────────────────────────── */
+.api-key-wrap { margin-right: 12px; }
+.api-key-status {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: all .2s;
+}
+.api-key-status:hover { border-color: var(--accent); color: var(--text); }
+.key-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.key-dot.red { background: var(--q1); box-shadow: 0 0 6px var(--q1); }
+.key-dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+
+.key-modal-box {
+  max-width: 440px; width: 90%;
+  display: flex; flex-direction: column; gap: 14px;
+  text-align: left;
+}
+.key-modal-title { font-size: 17px; font-weight: 700; }
+.key-modal-desc { font-size: 13px; color: var(--text-muted); line-height: 1.7; }
+.key-modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+.key-modal-link { font-size: 12px; color: var(--accent); text-decoration: none; text-align: center; }
+.key-modal-link:hover { text-decoration: underline; }
+
 /* ── Utilities ───────────────────────────────────────────── */
 .hidden { display: none !important; }
 

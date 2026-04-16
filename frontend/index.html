@@ -18,6 +18,12 @@
         <span class="logo-sub">基于四象限 · 企业风险评估</span>
       </div>
     </div>
+    <div class="api-key-wrap">
+      <div class="api-key-status" id="api-key-status" onclick="openKeyModal()">
+        <span id="key-dot" class="key-dot red"></span>
+        <span id="key-label">未设置 API Key</span>
+      </div>
+    </div>
     <div class="header-stats">
       <div class="stat-card">
         <div class="stat-num" id="stat-total">0</div>
@@ -158,6 +164,20 @@
   </aside>
 
 </main>
+
+<!-- ── API Key Modal ──────────────────────────────────────── -->
+<div class="overlay" id="key-modal">
+  <div class="overlay-box key-modal-box">
+    <div class="key-modal-title">🔑 设置 DeepSeek API Key</div>
+    <p class="key-modal-desc">输入你自己的 DeepSeek API Key，Key 只保存在你的浏览器本地，不会上传到任何服务器。</p>
+    <input type="password" id="key-input" placeholder="sk-xxxxxxxxxxxxxxxx" />
+    <div class="key-modal-actions">
+      <button class="btn-ghost" onclick="closeKeyModal()">取消</button>
+      <button class="btn-primary" onclick="saveKey()">保存并使用</button>
+    </div>
+    <a class="key-modal-link" href="https://platform.deepseek.com/api_keys" target="_blank">没有 Key？去 DeepSeek 免费获取 →</a>
+  </div>
+</div>
 
 <!-- ── Loading Overlay ────────────────────────────────────── -->
 <div class="overlay hidden" id="overlay">

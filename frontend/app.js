@@ -3,6 +3,36 @@ const API = 'http://localhost:8000';
 let tasks = [];
 let selectedTaskId = null;
 
+// ── API Key Management ─────────────────────────────────────
+function getKey() { return localStorage.getItem('deepseek_api_key') || ''; }
+
+function openKeyModal() {
+  document.getElementById('key-input').value = getKey();
+  document.getElementById('key-modal').classList.remove('hidden');
+}
+function closeKeyModal() {
+  document.getElementById('key-modal').classList.add('hidden');
+}
+function saveKey() {
+  const key = document.getElementById('key-input').value.trim();
+  if (!key) { alert('请输入 API Key'); return; }
+  localStorage.setItem('deepseek_api_key', key);
+  updateKeyStatus();
+  closeKeyModal();
+}
+function updateKeyStatus() {
+  const key = getKey();
+  const dot = document.getElementById('key-dot');
+  const label = document.getElementById('key-label');
+  if (key) {
+    dot.className = 'key-dot green';
+    label.textContent = 'API Key 已设置 ✓';
+  } else {
+    dot.className = 'key-dot red';
+    label.textContent = '未设置 API Key';
+  }
+}
+
 // ── Demo Data ──────────────────────────────────────────────
 const DEMOS = {
   crisis: {
@@ -28,6 +58,9 @@ const DEMOS = {
 // ── Init ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('task-form').addEventListener('submit', handleSubmit);
+  updateKeyStatus();
+  // Auto-open key modal if no key set
+  if (!getKey()) openKeyModal();
   loadTasks();
 });
 
@@ -63,13 +96,16 @@ async function handleSubmit(e) {
 
   if (!title || !description) return;
 
+  const apiKey = getKey();
+  if (!apiKey) { openKeyModal(); return; }
+
   showOverlay(true);
   setSubmitState(true);
 
   try {
     const res = await fetch(`${API}/api/tasks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
       body: JSON.stringify({ title, description, deadline: deadline || null, stakeholders: stakeholders || null })
     });
 
@@ -270,7 +306,10 @@ function showTaskDetail(task) {
 async function decomposeTask(taskId) {
   showOverlay(true);
   try {
-    const res = await fetch(`${API}/api/tasks/${taskId}/decompose`, { method: 'POST' });
+    const res = await fetch(`${API}/api/tasks/${taskId}/decompose`, {
+      method: 'POST',
+      headers: { 'X-API-Key': getKey() }
+    });
     if (!res.ok) throw new Error();
     const updated = await res.json();
     const idx = tasks.findIndex(t => t.id === taskId);

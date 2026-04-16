@@ -1,6 +1,6 @@
-import anthropic
 import json
 import os
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,10 +8,29 @@ load_dotenv()
 
 class TaskAIAgent:
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        self.model = "claude-sonnet-4-6"
+        self.model = "deepseek-chat"
 
-    def analyze_task(self, title: str, description: str, deadline: str = None, stakeholders: str = None) -> dict:
+    def _get_client(self, api_key: str):
+        return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+
+    def _chat(self, prompt: str, api_key: str, max_tokens: int = 2000) -> str:
+        client = self._get_client(api_key)
+        response = client.chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content.strip()
+
+    def _parse_json(self, text: str):
+        # Strip markdown code fences if present
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        return json.loads(text.strip())
+
+    def analyze_task(self, title: str, description: str, deadline: str = None, stakeholders: str = None, api_key: str = None) -> dict:
         prompt = f"""你是一个企业任务优先级AI助手。请深度分析以下任务，并严格按JSON格式返回分析结果。
 
 任务标题: {title}
@@ -68,24 +87,10 @@ class TaskAIAgent:
     "delegation_suggestion": "是否建议授权他人，以及原因"
 }}"""
 
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        content = message.content[0].text.strip()
-
-        # Strip markdown code blocks if present
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
+            content = self._chat(prompt, api_key=api_key or os.getenv("DEEPSEEK_API_KEY"), max_tokens=2000)
+            return self._parse_json(content)
+        except Exception:
             return {
                 "quadrant": "Q2",
                 "quadrant_label": "不紧急但重要",
@@ -105,7 +110,7 @@ class TaskAIAgent:
                 "delegation_suggestion": "待分析"
             }
 
-    def decompose_task(self, title: str, description: str) -> list:
+    def decompose_task(self, title: str, description: str, api_key: str = None) -> list:
         prompt = f"""你是一个项目管理AI助手。请将以下任务拆解为详细的、可立即执行的步骤。
 
 任务: {title}
@@ -130,21 +135,8 @@ class TaskAIAgent:
     }}
 ]"""
 
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        content = message.content[0].text.strip()
-
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
+            content = self._chat(prompt, api_key=api_key or os.getenv("DEEPSEEK_API_KEY"), max_tokens=1500)
+            return self._parse_json(content)
+        except Exception:
             return []
