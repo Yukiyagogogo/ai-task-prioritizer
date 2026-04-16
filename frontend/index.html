@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 任务优先级助手</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────── -->
+<header class="header">
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-icon">AI</div>
+      <div class="logo-text">
+        <span class="logo-title">任务优先级助手</span>
+        <span class="logo-sub">基于四象限 · 企业风险评估</span>
+      </div>
+    </div>
+    <div class="header-stats">
+      <div class="stat-card">
+        <div class="stat-num" id="stat-total">0</div>
+        <div class="stat-label">全部任务</div>
+      </div>
+      <div class="stat-card urgent">
+        <div class="stat-num" id="stat-q1">0</div>
+        <div class="stat-label">立即处理</div>
+      </div>
+      <div class="stat-card important">
+        <div class="stat-num" id="stat-q2">0</div>
+        <div class="stat-label">计划执行</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ── Main Layout ────────────────────────────────────────── -->
+<main class="main">
+
+  <!-- LEFT: Input Form -->
+  <aside class="panel panel-form">
+    <div class="panel-header">
+      <h2>添加任务</h2>
+      <span class="badge">AI 智能分析</span>
+    </div>
+
+    <form id="task-form">
+      <div class="form-group">
+        <label>任务标题 <span class="required">*</span></label>
+        <input type="text" id="f-title" placeholder="例：Q2 产品发布计划" required />
+      </div>
+      <div class="form-group">
+        <label>任务描述 <span class="required">*</span></label>
+        <textarea id="f-desc" rows="5" placeholder="详细描述任务内容、目标和背景..." required></textarea>
+      </div>
+      <div class="form-group">
+        <label>截止日期</label>
+        <input type="date" id="f-deadline" />
+      </div>
+      <div class="form-group">
+        <label>相关方 / 客户</label>
+        <input type="text" id="f-stakeholders" placeholder="例：CEO、重要客户、监管部门" />
+      </div>
+
+      <button type="submit" class="btn-primary" id="submit-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+        <span id="btn-label">AI 分析并排序</span>
+      </button>
+    </form>
+
+    <!-- Demo Tasks -->
+    <div class="demo-section">
+      <div class="demo-title">快速体验</div>
+      <button class="demo-btn" onclick="loadDemo('crisis')">🔥 线上故障处理</button>
+      <button class="demo-btn" onclick="loadDemo('strategy')">📋 年度战略规划</button>
+      <button class="demo-btn" onclick="loadDemo('meeting')">📞 例行汇报会议</button>
+    </div>
+  </aside>
+
+  <!-- CENTER: Eisenhower Matrix -->
+  <section class="panel panel-matrix">
+    <div class="panel-header">
+      <h2>四象限优先级矩阵</h2>
+      <button class="btn-ghost" onclick="clearAll()">清空全部</button>
+    </div>
+
+    <div class="matrix-wrap">
+      <!-- Axis Labels -->
+      <div class="axis-label axis-y-top">重要 ↑</div>
+      <div class="axis-label axis-x-right">→ 紧急</div>
+      <div class="axis-label axis-y-bottom">↓ 不重要</div>
+      <div class="axis-label axis-x-left">不紧急 ←</div>
+
+      <div class="matrix">
+        <!-- Q2: Not Urgent, Important (top-left) -->
+        <div class="quadrant q2" id="quad-Q2" onclick="filterQuadrant('Q2')">
+          <div class="quad-header">
+            <div class="quad-icon">📋</div>
+            <div class="quad-info">
+              <div class="quad-title">计划执行</div>
+              <div class="quad-sub">不紧急但重要</div>
+            </div>
+            <div class="quad-badge" id="cnt-Q2">0</div>
+          </div>
+          <div class="quad-tasks" id="tasks-Q2"></div>
+        </div>
+
+        <!-- Q1: Urgent & Important (top-right) -->
+        <div class="quadrant q1" id="quad-Q1" onclick="filterQuadrant('Q1')">
+          <div class="quad-header">
+            <div class="quad-icon">🔥</div>
+            <div class="quad-info">
+              <div class="quad-title">立即处理</div>
+              <div class="quad-sub">紧急且重要</div>
+            </div>
+            <div class="quad-badge" id="cnt-Q1">0</div>
+          </div>
+          <div class="quad-tasks" id="tasks-Q1"></div>
+        </div>
+
+        <!-- Q3: Urgent, Not Important (bottom-left) -->
+        <div class="quadrant q3" id="quad-Q3" onclick="filterQuadrant('Q3')">
+          <div class="quad-header">
+            <div class="quad-icon">⚡</div>
+            <div class="quad-info">
+              <div class="quad-title">授权他人</div>
+              <div class="quad-sub">紧急但不重要</div>
+            </div>
+            <div class="quad-badge" id="cnt-Q3">0</div>
+          </div>
+          <div class="quad-tasks" id="tasks-Q3"></div>
+        </div>
+
+        <!-- Q4: Not Urgent, Not Important (bottom-right) -->
+        <div class="quadrant q4" id="quad-Q4" onclick="filterQuadrant('Q4')">
+          <div class="quad-header">
+            <div class="quad-icon">🗑️</div>
+            <div class="quad-info">
+              <div class="quad-title">考虑删除</div>
+              <div class="quad-sub">不紧急也不重要</div>
+            </div>
+            <div class="quad-badge" id="cnt-Q4">0</div>
+          </div>
+          <div class="quad-tasks" id="tasks-Q4"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: Detail Panel -->
+  <aside class="panel panel-detail" id="detail-panel">
+    <div class="detail-empty" id="detail-empty">
+      <div class="detail-empty-icon">👆</div>
+      <p>点击任务卡片<br />查看 AI 分析详情</p>
+    </div>
+    <div class="detail-content hidden" id="detail-content"></div>
+  </aside>
+
+</main>
+
+<!-- ── Loading Overlay ────────────────────────────────────── -->
+<div class="overlay hidden" id="overlay">
+  <div class="overlay-box">
+    <div class="spinner"></div>
+    <p class="overlay-text">AI 正在深度分析任务...</p>
+    <p class="overlay-sub">评估优先级、风险与执行策略</p>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
