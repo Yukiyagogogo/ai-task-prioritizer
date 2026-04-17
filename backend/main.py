@@ -1,12 +1,13 @@
 import os
 import uuid
+import json
 from datetime import datetime
 from typing import Optional, List
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -22,38 +23,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage (demo — replace with DB for production)
 tasks_db: dict = {}
-
 agent = TaskAIAgent()
 
 
-# ─── Pydantic Models ─────────────────────────────────────────────────────────
+# ─── Pydantic Models ──────────────────────────────────────────────────────────
 
 class TaskInput(BaseModel):
     title: str
     description: str
     deadline: Optional[str] = None
     stakeholders: Optional[str] = None
-
-
-class RiskAssessment(BaseModel):
-    overall_risk: str
-    compliance_risk: str
-    financial_impact: str
-    reputation_risk: str
-    operational_risk: str
-
-
-class SubTask(BaseModel):
-    step: int
-    title: str
-    description: str
-    estimated_time: str
-    owner: Optional[str] = None
-    deliverable: Optional[str] = None
-    tips: Optional[str] = None
-    dependencies: Optional[str] = None
 
 
 class Task(BaseModel):
@@ -83,10 +63,72 @@ def health_check():
     return {"status": "ok", "version": "1.0.0"}
 
 
-@app.post("/api/tasks", response_model=Task)
-def create_task(task_input: TaskInput, x_api_key: Optional[str] = Header(default=None)):
+@app.post("/api/tasks/stream")
+def create_task_stream(task_input: TaskInput, x_api_key: Optional[str] = Header(default=None)):
+    """Two-phase SSE: phase1=quick classify, phase2=full streaming detail."""
+    api_key = x_api_key or os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="请提供 DeepSeek API Key")
+
     task_id = str(uuid.uuid4())[:8]
 
+    def generate():
+        try:
+            # ── Phase 1: quick classify only (max_tokens=60) ─
+            quick = agent.quick_classify(
+                title=task_input.title, description=task_input.description,
+                deadline=task_input.deadline, stakeholders=task_input.stakeholders,
+                api_key=api_key,
+            )
+            q = quick.get("quadrant", "Q2")
+            ql = quick.get("quadrant_label", "不紧急但重要")
+            ps = quick.get("priority_score", 50)
+            # Emit phase 1 result immediately — frontend places card now
+            yield f"data: {json.dumps({'type': 'placed', 'quadrant': q, 'quadrant_label': ql, 'priority_score': ps})}\n\n"
+
+            # ── Phase 2: full detail (streaming) ──────────────
+            collected = ""
+            for chunk in agent.full_analyze_stream(
+                title=task_input.title, description=task_input.description,
+                deadline=task_input.deadline, stakeholders=task_input.stakeholders,
+                api_key=api_key,
+            ):
+                collected += chunk
+                yield f"data: {json.dumps({'type': 'chunk'})}\n\n"
+
+            analysis = agent.parse_json(collected) or {}
+            for k in ('quadrant', 'quadrant_label', 'priority_score', 'urgency_level', 'importance_level'):
+                if not analysis.get(k):
+                    analysis[k] = quick.get(k)
+
+            task = Task(
+                id=task_id,
+                title=task_input.title, description=task_input.description,
+                deadline=task_input.deadline, stakeholders=task_input.stakeholders,
+                quadrant=analysis.get("quadrant"),
+                quadrant_label=analysis.get("quadrant_label"),
+                priority_score=analysis.get("priority_score"),
+                urgency_level=analysis.get("urgency_level"),
+                importance_level=analysis.get("importance_level"),
+                risk_assessment=analysis.get("risk_assessment"),
+                key_points=analysis.get("key_points", []),
+                subtasks=analysis.get("subtasks", []),
+                recommendation=analysis.get("recommendation"),
+                delegation_suggestion=analysis.get("delegation_suggestion"),
+                created_at=datetime.now().isoformat(),
+                analysis_complete=True,
+            )
+            tasks_db[task_id] = task.model_dump()
+            yield f"data: {json.dumps({'type': 'done', 'task': task.model_dump()})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/api/tasks", response_model=Task)
+def create_task(task_input: TaskInput, x_api_key: Optional[str] = Header(default=None)):
     api_key = x_api_key or os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise HTTPException(status_code=401, detail="请提供 DeepSeek API Key")
@@ -100,7 +142,7 @@ def create_task(task_input: TaskInput, x_api_key: Optional[str] = Header(default
     )
 
     task = Task(
-        id=task_id,
+        id=str(uuid.uuid4())[:8],
         title=task_input.title,
         description=task_input.description,
         deadline=task_input.deadline,
@@ -119,7 +161,7 @@ def create_task(task_input: TaskInput, x_api_key: Optional[str] = Header(default
         analysis_complete=True,
     )
 
-    tasks_db[task_id] = task.model_dump()
+    tasks_db[task.id] = task.model_dump()
     return task
 
 

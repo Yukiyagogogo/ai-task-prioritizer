@@ -1,142 +1,143 @@
 import json
 import os
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Phase 1: Quick classify (fast, ~1-2s) ─────────────────
+QUICK_PROMPT = """判断任务优先级，只返回JSON，不要其他文字：
+
+标题: {title}
+描述: {description}
+截止: {deadline}
+相关方: {stakeholders}
+
+{{"quadrant":"Q1","quadrant_label":"紧急且重要","priority_score":85,"urgency_level":"高","importance_level":"高"}}"""
+
+# ── Phase 2: Full analysis ─────────────────────────────────
+FULL_PROMPT = """你是企业任务优先级助手。对以下任务做深度分析，只返回JSON：
+
+标题: {title}
+描述: {description}
+截止: {deadline}
+相关方: {stakeholders}
+
+{{"quadrant":"Q1","quadrant_label":"紧急且重要","priority_score":85,"urgency_level":"高","importance_level":"高","risk_assessment":{{"overall_risk":"高","compliance_risk":"说明","financial_impact":"说明","reputation_risk":"说明","operational_risk":"说明"}},"key_points":["点1","点2","点3"],"subtasks":[{{"step":1,"title":"步骤","description":"说明","estimated_time":"时间","owner":"负责人"}}],"recommendation":"建议","delegation_suggestion":"授权建议"}}"""
 
 
 class TaskAIAgent:
     def __init__(self):
         self.model = "deepseek-chat"
 
-    def _get_client(self, api_key: str):
+    def _get_client(self, api_key: str) -> OpenAI:
         return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
-    def _chat(self, prompt: str, api_key: str, max_tokens: int = 2000) -> str:
-        client = self._get_client(api_key)
-        response = client.chat.completions.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.choices[0].message.content.strip()
-
-    def _parse_json(self, text: str):
-        # Strip markdown code fences if present
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        return json.loads(text.strip())
-
-    def analyze_task(self, title: str, description: str, deadline: str = None, stakeholders: str = None, api_key: str = None) -> dict:
-        prompt = f"""你是一个企业任务优先级AI助手。请深度分析以下任务，并严格按JSON格式返回分析结果。
-
-任务标题: {title}
-任务描述: {description}
-截止日期: {deadline or "未指定"}
-相关方/客户: {stakeholders or "未指定"}
-
-## 分析要求
-
-### 1. 四象限分类（艾森豪威尔矩阵）
-- Q1: 紧急且重要 — 危机、deadline紧迫、重要客户问题
-- Q2: 不紧急但重要 — 战略规划、能力建设、预防性工作
-- Q3: 紧急但不重要 — 临时性会议、他人要求的非核心事务
-- Q4: 不紧急也不重要 — 可以删除或推迟的事项
-
-### 2. 企业风险评估维度
-- 合规风险、财务影响、声誉风险、运营风险
-
-### 3. 关键行动点
-提取3-5个最需要关注的核心行动点
-
-### 4. 子任务拆解
-将任务拆解为3-6个可执行步骤
-
-请只返回以下JSON格式，不要任何其他文字：
-{{
-    "quadrant": "Q1",
-    "quadrant_label": "紧急且重要",
-    "priority_score": 85,
-    "urgency_level": "高",
-    "importance_level": "高",
-    "risk_assessment": {{
-        "overall_risk": "高",
-        "compliance_risk": "涉及合规风险说明",
-        "financial_impact": "财务影响说明",
-        "reputation_risk": "声誉风险说明",
-        "operational_risk": "运营风险说明"
-    }},
-    "key_points": [
-        "关键行动点1",
-        "关键行动点2",
-        "关键行动点3"
-    ],
-    "subtasks": [
-        {{
-            "step": 1,
-            "title": "子任务标题",
-            "description": "具体执行内容",
-            "estimated_time": "预计用时",
-            "owner": "建议负责人类型"
-        }}
-    ],
-    "recommendation": "总体优化建议，说明如何最有效地处理这个任务（2-3句话）",
-    "delegation_suggestion": "是否建议授权他人，以及原因"
-}}"""
-
+    def parse_json(self, text: str):
+        content = text.strip()
+        if "```" in content:
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
         try:
-            content = self._chat(prompt, api_key=api_key or os.getenv("DEEPSEEK_API_KEY"), max_tokens=2000)
-            return self._parse_json(content)
+            return json.loads(content)
         except Exception:
-            return {
-                "quadrant": "Q2",
-                "quadrant_label": "不紧急但重要",
-                "priority_score": 50,
-                "urgency_level": "中",
-                "importance_level": "中",
-                "risk_assessment": {
-                    "overall_risk": "中",
-                    "compliance_risk": "需进一步评估",
-                    "financial_impact": "需进一步评估",
-                    "reputation_risk": "需进一步评估",
-                    "operational_risk": "需进一步评估"
-                },
-                "key_points": ["请提供更详细的任务描述以获得准确分析"],
-                "subtasks": [],
-                "recommendation": "建议补充更多任务细节以进行精确分析。",
-                "delegation_suggestion": "待分析"
-            }
+            return None
+
+    def _fallback(self) -> dict:
+        return {
+            "quadrant": "Q2", "quadrant_label": "不紧急但重要",
+            "priority_score": 50, "urgency_level": "中", "importance_level": "中",
+            "risk_assessment": {"overall_risk": "中", "compliance_risk": "需评估",
+                                "financial_impact": "需评估", "reputation_risk": "需评估",
+                                "operational_risk": "需评估"},
+            "key_points": ["请提供更多任务细节"], "subtasks": [],
+            "recommendation": "建议补充更多细节以获得精确分析。",
+            "delegation_suggestion": "待分析"
+        }
+
+    def quick_classify(self, title: str, description: str,
+                       deadline: str = None, stakeholders: str = None,
+                       api_key: str = None) -> dict:
+        """Phase 1: just quadrant + score, very fast."""
+        client = self._get_client(api_key or os.getenv("DEEPSEEK_API_KEY"))
+        prompt = QUICK_PROMPT.format(
+            title=title, description=description,
+            deadline=deadline or "未指定", stakeholders=stakeholders or "未指定"
+        )
+        for attempt in range(3):
+            try:
+                resp = client.chat.completions.create(
+                    model=self.model, max_tokens=80,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                result = self.parse_json(resp.choices[0].message.content)
+                return result if result else {}
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(1.5)
+                else:
+                    raise e
+        return {}
+
+    def full_analyze_stream(self, title: str, description: str,
+                            deadline: str = None, stakeholders: str = None,
+                            api_key: str = None):
+        """Phase 2: full streaming analysis, with up to 2 retries on connection error."""
+        client = self._get_client(api_key or os.getenv("DEEPSEEK_API_KEY"))
+        prompt = FULL_PROMPT.format(
+            title=title, description=description,
+            deadline=deadline or "未指定", stakeholders=stakeholders or "未指定"
+        )
+        for attempt in range(3):
+            try:
+                stream = client.chat.completions.create(
+                    model=self.model, max_tokens=900, stream=True,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                for chunk in stream:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        yield delta
+                return  # success
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(1.5)
+                else:
+                    raise e
+
+    def analyze_task(self, title: str, description: str,
+                     deadline: str = None, stakeholders: str = None,
+                     api_key: str = None) -> dict:
+        client = self._get_client(api_key or os.getenv("DEEPSEEK_API_KEY"))
+        prompt = FULL_PROMPT.format(
+            title=title, description=description,
+            deadline=deadline or "未指定", stakeholders=stakeholders or "未指定"
+        )
+        try:
+            resp = client.chat.completions.create(
+                model=self.model, max_tokens=900,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            result = self.parse_json(resp.choices[0].message.content)
+            return result if result else self._fallback()
+        except Exception:
+            return self._fallback()
 
     def decompose_task(self, title: str, description: str, api_key: str = None) -> list:
-        prompt = f"""你是一个项目管理AI助手。请将以下任务拆解为详细的、可立即执行的步骤。
-
+        client = self._get_client(api_key or os.getenv("DEEPSEEK_API_KEY"))
+        prompt = f"""将以下任务拆解为可执行步骤，最多6步，只返回JSON数组：
 任务: {title}
 描述: {description}
-
-要求：
-1. 每个步骤必须具体可操作
-2. 按照执行顺序排列
-3. 包含每步的注意事项
-4. 最多8个步骤
-
-只返回JSON数组，不要其他文字：
-[
-    {{
-        "step": 1,
-        "title": "步骤标题",
-        "description": "具体操作说明",
-        "estimated_time": "预计用时（如：2小时）",
-        "deliverable": "该步骤产出物",
-        "tips": "执行注意事项",
-        "dependencies": "依赖的前置步骤（无则填'无'）"
-    }}
-]"""
-
+[{{"step":1,"title":"步骤","description":"说明","estimated_time":"时长","deliverable":"产出","tips":"注意","dependencies":"依赖"}}]"""
         try:
-            content = self._chat(prompt, api_key=api_key or os.getenv("DEEPSEEK_API_KEY"), max_tokens=1500)
-            return self._parse_json(content)
+            resp = client.chat.completions.create(
+                model=self.model, max_tokens=800,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            result = self.parse_json(resp.choices[0].message.content)
+            return result if isinstance(result, list) else []
         except Exception:
             return []

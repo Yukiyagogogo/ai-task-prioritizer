@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -17,6 +17,9 @@
         <span class="logo-title">任务优先级助手</span>
         <span class="logo-sub">基于四象限 · 企业风险评估</span>
       </div>
+    </div>
+    <div class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换主题">
+      <span id="theme-icon">☀️</span>
     </div>
     <div class="api-key-wrap">
       <div class="api-key-status" id="api-key-status" onclick="openKeyModal()">
@@ -179,12 +182,47 @@
   </div>
 </div>
 
+<!-- ── Edit Modal ────────────────────────────────────────── -->
+<div class="overlay hidden" id="edit-modal">
+  <div class="overlay-box key-modal-box">
+    <div class="key-modal-title">✏️ 编辑任务</div>
+    <input type="hidden" id="edit-task-id" />
+    <div class="form-group" style="margin-top:4px">
+      <label>任务标题</label>
+      <input type="text" id="edit-title" placeholder="任务标题" />
+    </div>
+    <div class="form-group">
+      <label>任务描述</label>
+      <textarea id="edit-desc" rows="4" placeholder="详细描述..."></textarea>
+    </div>
+    <div class="form-group">
+      <label>截止日期</label>
+      <input type="date" id="edit-deadline" />
+    </div>
+    <div class="form-group">
+      <label>相关方 / 客户</label>
+      <input type="text" id="edit-stakeholders" placeholder="相关方..." />
+    </div>
+    <div class="key-modal-actions">
+      <button class="btn-ghost" onclick="closeEditModal()">取消</button>
+      <button class="btn-primary" onclick="saveEdit()">重新 AI 分析</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ──────────────────────────────────────────────── -->
+<div class="toast hidden" id="toast">
+  <span id="toast-msg"></span>
+  <button class="toast-undo" id="toast-undo" onclick="undoDelete()">撤销</button>
+</div>
+
 <!-- ── Loading Overlay ────────────────────────────────────── -->
 <div class="overlay hidden" id="overlay">
   <div class="overlay-box">
     <div class="spinner"></div>
     <p class="overlay-text">AI 正在深度分析任务...</p>
-    <p class="overlay-sub">评估优先级、风险与执行策略</p>
+    <p class="overlay-sub" id="stream-status">评估优先级、风险与执行策略</p>
+    <div class="stream-bar-track"><div class="stream-bar-fill" id="stream-bar"></div></div>
   </div>
 </div>
 

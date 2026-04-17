@@ -2,6 +2,9 @@
 const API = 'http://localhost:8000';
 let tasks = [];
 let selectedTaskId = null;
+let completedIds = new Set(JSON.parse(localStorage.getItem('completed_ids') || '[]'));
+let deletedBuffer = null;   // { task, timer }
+let toastTimer = null;
 
 // ── API Key Management ─────────────────────────────────────
 function getKey() { return localStorage.getItem('deepseek_api_key') || ''; }
@@ -55,11 +58,24 @@ const DEMOS = {
   }
 };
 
+// ── Theme ──────────────────────────────────────────────────
+function getTheme() { return localStorage.getItem('theme') || 'dark'; }
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('theme-icon').textContent = theme === 'dark' ? '☀️' : '🌙';
+  localStorage.setItem('theme', theme);
+}
+
+function toggleTheme() {
+  applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
+}
+
 // ── Init ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('task-form').addEventListener('submit', handleSubmit);
   updateKeyStatus();
-  // Auto-open key modal if no key set
+  applyTheme(getTheme());
   if (!getKey()) openKeyModal();
   loadTasks();
 });
@@ -86,7 +102,7 @@ function loadDemo(key) {
   document.getElementById('f-stakeholders').value = d.stakeholders || '';
 }
 
-// ── Submit Handler ─────────────────────────────────────────
+// ── Submit Handler (streaming) ─────────────────────────────
 async function handleSubmit(e) {
   e.preventDefault();
   const title = document.getElementById('f-title').value.trim();
@@ -99,34 +115,76 @@ async function handleSubmit(e) {
   const apiKey = getKey();
   if (!apiKey) { openKeyModal(); return; }
 
-  showOverlay(true);
   setSubmitState(true);
 
+  // Show placeholder chip immediately — no blocking overlay
+  const placeholderId = 'ph-' + Date.now();
+  showPlaceholderChip(placeholderId, title);
+  document.getElementById('task-form').reset();
+
   try {
-    const res = await fetch(`${API}/api/tasks`, {
+    const res = await fetch(`${API}/api/tasks/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
       body: JSON.stringify({ title, description, deadline: deadline || null, stakeholders: stakeholders || null })
     });
 
     if (!res.ok) {
+      removePlaceholderChip(placeholderId);
       const err = await res.json();
       alert('分析失败: ' + (err.detail || '请检查 API Key 是否配置正确'));
       return;
     }
 
-    const task = await res.json();
-    tasks.push(task);
-    renderAll();
-    showTaskDetail(task);
-    selectedTaskId = task.id;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let charCount = 0;
 
-    // Reset form
-    document.getElementById('task-form').reset();
+    // Start real stopwatch on chip
+    startChipStopwatch(placeholderId);
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = JSON.parse(line.slice(6));
+
+        if (data.type === 'placed') {
+          // Phase 1 done: move chip to correct quadrant immediately
+          placeChipInQuadrant(placeholderId, data.quadrant, data.quadrant_label, data.priority_score);
+        }
+
+        if (data.type === 'chunk') {
+          charCount++;
+          updateChipProgress(placeholderId);
+        }
+
+        if (data.type === 'done') {
+          removePlaceholderChip(placeholderId);
+          const task = data.task;
+          tasks.push(task);
+          renderAll();
+          showTaskDetail(task);
+          selectedTaskId = task.id;
+        }
+
+        if (data.type === 'error') {
+          removePlaceholderChip(placeholderId);
+          alert('分析出错: ' + data.message);
+        }
+      }
+    }
   } catch (err) {
+    removePlaceholderChip(placeholderId);
     alert('无法连接到后端服务，请确认后端已启动 (port 8000)');
   } finally {
-    showOverlay(false);
     setSubmitState(false);
   }
 }
@@ -169,18 +227,34 @@ function buildChip(task) {
   if (task.id === selectedTaskId) div.classList.add('active');
 
   const scoreColor = task.quadrant === 'Q1' ? '#ef4444' : task.quadrant === 'Q2' ? '#3b82f6' : task.quadrant === 'Q3' ? '#f59e0b' : '#6b7280';
+  const hasSteps = task.subtasks && task.subtasks.length > 0;
+  const isDone = completedIds.has(task.id);
 
   div.innerHTML = `
-    <div class="chip-title" title="${task.title}">${task.title}</div>
-    <div class="chip-meta">
-      <span class="chip-score" style="color:${scoreColor}">优先级 ${task.priority_score || '--'}</span>
-      <span class="chip-deadline">${task.deadline ? task.deadline : ''}</span>
-      <button class="chip-delete" onclick="deleteTask(event, '${task.id}')" title="删除">✕</button>
+    <div class="chip-main">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+        <input type="checkbox" class="chip-check" ${isDone ? 'checked' : ''}
+          onclick="toggleComplete(event,'${task.id}')" title="标记完成" />
+        <div class="chip-title" title="${task.title}">${task.title}</div>
+      </div>
+      <div class="chip-meta">
+        <span class="chip-score" style="color:${scoreColor}">优先级 ${task.priority_score || '--'}</span>
+        <span class="chip-deadline">${task.deadline || ''}</span>
+        <button class="chip-steps-btn" onclick="toggleSteps(event,'${task.id}')" title="查看步骤">
+          ${hasSteps ? '📋 步骤' : '✦ 拆解'}
+        </button>
+        <button class="chip-edit" onclick="openEditModal(event,'${task.id}')" title="编辑">✏️</button>
+        <button class="chip-delete" onclick="deleteTask(event,'${task.id}')" title="删除">✕</button>
+      </div>
+    </div>
+    <div class="chip-steps hidden" id="steps-${task.id}">
+      ${hasSteps ? renderStepsHtml(task.subtasks) : '<div class="steps-loading">AI 正在拆解步骤...</div>'}
     </div>
   `;
+  if (isDone) div.classList.add('completed');
 
   div.addEventListener('click', (e) => {
-    if (e.target.classList.contains('chip-delete')) return;
+    if (e.target.closest('.chip-steps-btn') || e.target.closest('.chip-delete') || e.target.closest('.chip-steps')) return;
     selectedTaskId = task.id;
     document.querySelectorAll('.task-chip').forEach(c => c.classList.remove('active'));
     div.classList.add('active');
@@ -188,6 +262,70 @@ function buildChip(task) {
   });
 
   return div;
+}
+
+function renderStepsHtml(subtasks) {
+  if (!subtasks || subtasks.length === 0) return '<div class="steps-empty">暂无步骤</div>';
+  return subtasks.map(st => `
+    <div class="chip-step-item">
+      <div class="chip-step-num">${st.step}</div>
+      <div class="chip-step-body">
+        <div class="chip-step-title">${st.title}</div>
+        <div class="chip-step-desc">${st.description || ''}</div>
+        ${st.estimated_time ? `<div class="chip-step-time">⏱ ${st.estimated_time}</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function toggleSteps(e, taskId) {
+  e.stopPropagation();
+  const stepsEl = document.getElementById(`steps-${taskId}`);
+  const btn = e.target.closest('.chip-steps-btn');
+  const isHidden = stepsEl.classList.contains('hidden');
+
+  if (!isHidden) {
+    stepsEl.classList.add('hidden');
+    return;
+  }
+
+  stepsEl.classList.remove('hidden');
+
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  // Already has steps — just show
+  if (task.subtasks && task.subtasks.length > 0) {
+    stepsEl.innerHTML = renderStepsHtml(task.subtasks);
+    return;
+  }
+
+  // No steps yet — call decompose API
+  btn.textContent = '⏳';
+  btn.disabled = true;
+  stepsEl.innerHTML = '<div class="steps-loading">AI 正在拆解步骤...</div>';
+
+  try {
+    const res = await fetch(`${API}/api/tasks/${taskId}/decompose`, {
+      method: 'POST',
+      headers: { 'X-API-Key': getKey() }
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      const idx = tasks.findIndex(t => t.id === taskId);
+      if (idx !== -1) tasks[idx] = updated;
+      stepsEl.innerHTML = renderStepsHtml(updated.subtasks);
+      btn.textContent = '📋 步骤';
+    } else {
+      stepsEl.innerHTML = '<div class="steps-empty">拆解失败，请重试</div>';
+      btn.textContent = '✦ 拆解';
+    }
+  } catch {
+    stepsEl.innerHTML = '<div class="steps-empty">网络错误，请重试</div>';
+    btn.textContent = '✦ 拆解';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Show Task Detail ───────────────────────────────────────
@@ -322,22 +460,151 @@ async function decomposeTask(taskId) {
   }
 }
 
-// ── Delete Task ────────────────────────────────────────────
+// ── Complete Toggle ────────────────────────────────────────
+function toggleComplete(e, taskId) {
+  e.stopPropagation();
+  const chip = document.getElementById(`chip-${taskId}`);
+  if (completedIds.has(taskId)) {
+    completedIds.delete(taskId);
+    chip.classList.remove('completed');
+  } else {
+    completedIds.add(taskId);
+    chip.classList.add('completed');
+  }
+  localStorage.setItem('completed_ids', JSON.stringify([...completedIds]));
+}
+
+// ── Delete Task (with undo) ────────────────────────────────
 async function deleteTask(e, taskId) {
   e.stopPropagation();
-  if (!confirm('确认删除此任务？')) return;
-  try {
-    await fetch(`${API}/api/tasks/${taskId}`, { method: 'DELETE' });
-    tasks = tasks.filter(t => t.id !== taskId);
-    if (selectedTaskId === taskId) {
-      selectedTaskId = null;
-      document.getElementById('detail-empty').classList.remove('hidden');
-      document.getElementById('detail-content').classList.add('hidden');
-    }
-    renderAll();
-  } catch {
-    alert('删除失败');
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  // Soft-delete: remove from UI first
+  tasks = tasks.filter(t => t.id !== taskId);
+  if (selectedTaskId === taskId) {
+    selectedTaskId = null;
+    document.getElementById('detail-empty').classList.remove('hidden');
+    document.getElementById('detail-content').classList.add('hidden');
   }
+  renderAll();
+
+  // Store for undo (10s window)
+  if (deletedBuffer?.timer) clearTimeout(deletedBuffer.timer);
+  deletedBuffer = {
+    task,
+    timer: setTimeout(async () => {
+      // Actually delete from backend after 10s
+      try { await fetch(`${API}/api/tasks/${taskId}`, { method: 'DELETE' }); } catch {}
+      deletedBuffer = null;
+      hideToast();
+    }, 10000)
+  };
+
+  showToast(`已删除「${task.title.slice(0, 12)}${task.title.length > 12 ? '…' : ''}」`);
+}
+
+async function undoDelete() {
+  if (!deletedBuffer) return;
+  clearTimeout(deletedBuffer.timer);
+  const task = deletedBuffer.task;
+  deletedBuffer = null;
+  hideToast();
+  tasks.push(task);
+  renderAll();
+}
+
+function showToast(msg) {
+  clearTimeout(toastTimer);
+  document.getElementById('toast-msg').textContent = msg;
+  document.getElementById('toast').classList.remove('hidden');
+  toastTimer = setTimeout(hideToast, 10000);
+}
+function hideToast() {
+  clearTimeout(toastTimer);
+  document.getElementById('toast').classList.add('hidden');
+}
+
+// ── Edit Modal ─────────────────────────────────────────────
+function openEditModal(e, taskId) {
+  e.stopPropagation();
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  document.getElementById('edit-task-id').value = taskId;
+  document.getElementById('edit-title').value = task.title;
+  document.getElementById('edit-desc').value = task.description;
+  document.getElementById('edit-deadline').value = task.deadline || '';
+  document.getElementById('edit-stakeholders').value = task.stakeholders || '';
+  document.getElementById('edit-modal').classList.remove('hidden');
+}
+function closeEditModal() {
+  document.getElementById('edit-modal').classList.add('hidden');
+}
+
+async function saveEdit() {
+  const taskId = document.getElementById('edit-task-id').value;
+  const title = document.getElementById('edit-title').value.trim();
+  const description = document.getElementById('edit-desc').value.trim();
+  const deadline = document.getElementById('edit-deadline').value;
+  const stakeholders = document.getElementById('edit-stakeholders').value.trim();
+  if (!title || !description) { alert('请填写标题和描述'); return; }
+
+  closeEditModal();
+
+  // Remove old task from list + UI
+  tasks = tasks.filter(t => t.id !== taskId);
+  if (selectedTaskId === taskId) {
+    selectedTaskId = null;
+    document.getElementById('detail-empty').classList.remove('hidden');
+    document.getElementById('detail-content').classList.add('hidden');
+  }
+  // Also delete on backend
+  try { await fetch(`${API}/api/tasks/${taskId}`, { method: 'DELETE' }); } catch {}
+
+  // Re-analyze with new data (reuse submit flow)
+  const apiKey = getKey();
+  if (!apiKey) { openKeyModal(); return; }
+
+  setSubmitState(true);
+  const placeholderId = 'ph-edit-' + Date.now();
+  showPlaceholderChip(placeholderId, title);
+
+  try {
+    const res = await fetch(`${API}/api/tasks/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body: JSON.stringify({ title, description, deadline: deadline || null, stakeholders: stakeholders || null })
+    });
+    if (!res.ok) { removePlaceholderChip(placeholderId); alert('重新分析失败'); return; }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    startChipCountdown(placeholderId);
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n'); buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = JSON.parse(line.slice(6));
+        if (data.type === 'quick') movePlaceholderToQuadrant(placeholderId, data.quadrant);
+        if (data.type === 'chunk') updateChipProgress(placeholderId, Math.min(90, data.text.length));
+        if (data.type === 'done') {
+          stopChipCountdown(placeholderId);
+          removePlaceholderChip(placeholderId);
+          tasks.push(data.task);
+          renderAll();
+          showTaskDetail(data.task);
+          selectedTaskId = data.task.id;
+        }
+        if (data.type === 'error') { stopChipCountdown(placeholderId); removePlaceholderChip(placeholderId); alert('分析失败'); }
+      }
+    }
+  } catch { removePlaceholderChip(placeholderId); alert('连接失败'); }
+  finally { setSubmitState(false); }
 }
 
 // ── Filter by Quadrant (UI feedback only) ──────────────────
@@ -366,13 +633,134 @@ async function clearAll() {
   renderAll();
 }
 
+// ── Placeholder Chip (real stopwatch) ─────────────────────
+const chipTimers = {};
+
+function showPlaceholderChip(id, title) {
+  const div = document.createElement('div');
+  div.className = 'task-chip placeholder-chip';
+  div.id = id;
+  div.innerHTML = `
+    <div class="chip-main">
+      <div class="chip-title">${title}</div>
+      <div class="chip-meta">
+        <span class="chip-ph-label">AI 判断象限中</span>
+        <span class="chip-stopwatch" id="sw-${id}">0.0s</span>
+      </div>
+    </div>
+    <div class="chip-ph-bar-track">
+      <div class="chip-ph-bar" id="bar-${id}"></div>
+    </div>
+  `;
+  // Always start in Q2 staging area until Phase 1 tells us real quadrant
+  document.getElementById('tasks-Q2').appendChild(div);
+}
+
+function startChipStopwatch(id) {
+  const startTime = Date.now();
+  chipTimers[id] = { startTime, phase: 1, chunks: 0 };
+
+  const tick = setInterval(() => {
+    const entry = chipTimers[id];
+    if (!entry) { clearInterval(tick); return; }
+    const elapsed = (Date.now() - startTime) / 1000;
+    const swEl = document.getElementById(`sw-${id}`);
+    const barEl = document.getElementById(`bar-${id}`);
+
+    if (swEl) {
+      if (entry.phase === 1) {
+        swEl.textContent = `${elapsed.toFixed(1)}s`;
+        swEl.style.color = 'var(--accent)';
+      } else {
+        swEl.textContent = `详情 ${elapsed.toFixed(1)}s`;
+        swEl.style.color = 'var(--text-muted)';
+      }
+    }
+    if (barEl && entry.phase === 1) {
+      // Phase 1 bar pulses between 10–40%
+      const pulse = 25 + 15 * Math.sin(elapsed * 3);
+      barEl.style.width = pulse + '%';
+    }
+  }, 100);
+
+  chipTimers[id].tick = tick;
+}
+
+function placeChipInQuadrant(id, quadrant, quadrantLabel, score) {
+  const entry = chipTimers[id];
+  if (!entry) return;
+
+  // Freeze phase 1 stopwatch, show actual elapsed in green
+  const elapsed = ((Date.now() - entry.startTime) / 1000).toFixed(1);
+  const swEl = document.getElementById(`sw-${id}`);
+  const barEl = document.getElementById(`bar-${id}`);
+  const labelEl = document.querySelector(`#${id} .chip-ph-label`);
+
+  if (swEl) {
+    swEl.textContent = `✓ ${elapsed}s`;
+    swEl.style.color = '#22c55e';
+  }
+
+  const color = quadrant === 'Q1' ? '#ef4444' : quadrant === 'Q2' ? '#3b82f6' : quadrant === 'Q3' ? '#f59e0b' : '#6b7280';
+  if (labelEl) {
+    labelEl.textContent = `${quadrantLabel || quadrant} · 优先级 ${score || '--'}`;
+    labelEl.style.color = color;
+  }
+  if (barEl) {
+    barEl.style.width = '30%';
+    barEl.style.background = color;
+    barEl.style.transition = 'width 0.4s ease';
+  }
+
+  // Move chip to correct quadrant
+  const el = document.getElementById(id);
+  if (el) {
+    document.getElementById(`tasks-${quadrant}`).appendChild(el);
+    el.classList.add('placeholder-placed');
+  }
+
+  // Enter phase 2: reset stopwatch origin, keep ticking
+  entry.phase = 2;
+  entry.startTime = Date.now();
+  entry.chunks = 0;
+}
+
+function updateChipProgress(id) {
+  const entry = chipTimers[id];
+  if (!entry || entry.phase !== 2) return;
+  entry.chunks = (entry.chunks || 0) + 1;
+  const barEl = document.getElementById(`bar-${id}`);
+  if (barEl) {
+    // Grow from 30% → 90% over ~200 chunks
+    const pct = 30 + Math.min(60, entry.chunks * 0.3);
+    barEl.style.width = pct + '%';
+  }
+}
+
+function removePlaceholderChip(id) {
+  const entry = chipTimers[id];
+  if (entry) {
+    clearInterval(entry.tick);
+    delete chipTimers[id];
+  }
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
 // ── UI Helpers ─────────────────────────────────────────────
 function showOverlay(show) {
   document.getElementById('overlay').classList.toggle('hidden', !show);
+  if (show) setStreamProgress(0, '正在连接 AI...');
 }
 function setSubmitState(loading) {
   const btn = document.getElementById('submit-btn');
   const label = document.getElementById('btn-label');
   btn.disabled = loading;
   label.textContent = loading ? 'AI 分析中...' : 'AI 分析并排序';
+}
+function setStreamProgress(pct, text) {
+  const bar = document.getElementById('stream-bar');
+  const status = document.getElementById('stream-status');
+  if (bar) bar.style.width = pct + '%';
+  if (status && text) status.textContent = text;
 }
